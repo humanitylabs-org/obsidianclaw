@@ -39,19 +39,19 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 6px 6px;
+  padding: 4px 4px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 2px;
   scroll-behavior: smooth;
   overscroll-behavior: contain;
 }
 
 /* Message bubbles */
 .openclaw-msg {
-  max-width: 85%;
-  padding: 8px 12px;
-  border-radius: 16px;
+  max-width: 95%;
+  padding: 7px 10px;
+  border-radius: 12px;
   font-size: 14px;
   line-height: 1.5;
   word-wrap: break-word;
@@ -76,12 +76,14 @@
   color: var(--text-on-accent);
 }
 
-/* Assistant messages: left-aligned, subtle background */
+/* Assistant messages: full width, no bubble */
 .openclaw-msg-assistant {
   align-self: flex-start;
-  background: var(--background-secondary);
+  max-width: 100%;
+  background: transparent;
   color: var(--text-normal);
-  border-bottom-left-radius: 4px;
+  padding: 6px 8px;
+  border-radius: 0;
 }
 
 /* Streaming message pulse */
@@ -182,7 +184,7 @@
 /* Input area */
 .openclaw-input-area {
   flex-shrink: 0;
-  padding: 4px 6px 6px;
+  padding: 2px 4px 4px;
 }
 
 .openclaw-input-row {
@@ -191,7 +193,7 @@
   gap: 4px;
   background: var(--background-secondary);
   border-radius: 22px;
-  padding: 3px 3px 3px 14px;
+  padding: 2px 2px 2px 10px;
   border: none;
 }
 
