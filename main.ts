@@ -2,6 +2,7 @@ import {
   App,
   ItemView,
   MarkdownRenderer,
+  Modal,
   Notice,
   Plugin,
   PluginSettingTab,
@@ -15,12 +16,14 @@ interface OpenClawSettings {
   gatewayUrl: string;
   token: string;
   sessionKey: string;
+  onboardingComplete: boolean;
 }
 
 const DEFAULT_SETTINGS: OpenClawSettings = {
   gatewayUrl: "ws://127.0.0.1:18789",
   token: "",
   sessionKey: "main",
+  onboardingComplete: false,
 };
 
 // ─── Gateway Client ──────────────────────────────────────────────────
@@ -37,11 +40,10 @@ interface GatewayClientOpts {
   onClose?: GatewayCloseHandler;
 }
 
-function uuid(): string {
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (c) => {
-    const r = (Math.random() * 16) | 0;
-    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
-  });
+function generateId(): string {
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 class GatewayClient {
@@ -53,6 +55,7 @@ class GatewayClient {
   private backoffMs = 800;
   private opts: GatewayClientOpts;
   private connectTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(opts: GatewayClientOpts) {
     this.opts = opts;
@@ -64,11 +67,17 @@ class GatewayClient {
 
   start(): void {
     this.closed = false;
-    this.connect();
+    this.doConnect();
   }
 
   stop(): void {
     this.closed = true;
+    if (this.connectTimer !== null) {
+      clearTimeout(this.connectTimer);
+      this.connectTimer = null;
+    }
+    for (const [, t] of this.pendingTimeouts) clearTimeout(t);
+    this.pendingTimeouts.clear();
     this.ws?.close();
     this.ws = null;
     this.flushPending(new Error("client stopped"));
@@ -78,17 +87,33 @@ class GatewayClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("not connected");
     }
-    const id = uuid();
+    const id = generateId();
     const msg = { type: "req", id, method, params };
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
+      // Timeout requests after 30s
+      const t = setTimeout(() => {
+        if (this.pending.has(id)) {
+          this.pending.delete(id);
+          reject(new Error("request timeout"));
+        }
+      }, 30000);
+      this.pendingTimeouts.set(id, t);
       this.ws!.send(JSON.stringify(msg));
     });
   }
 
-  private connect(): void {
+  private doConnect(): void {
     if (this.closed) return;
-    this.ws = new WebSocket(this.opts.url);
+
+    // Validate URL before connecting
+    const url = this.opts.url;
+    if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+      console.error("[ObsidianClaw] Invalid gateway URL: must start with ws:// or wss://");
+      return;
+    }
+
+    this.ws = new WebSocket(url);
     this.ws.addEventListener("open", () => this.queueConnect());
     this.ws.addEventListener("message", (e) => this.handleMessage(String(e.data ?? "")));
     this.ws.addEventListener("close", (e) => {
@@ -104,12 +129,17 @@ class GatewayClient {
     if (this.closed) return;
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 1.7, 15000);
-    setTimeout(() => this.connect(), delay);
+    setTimeout(() => this.doConnect(), delay);
   }
 
   private flushPending(err: Error): void {
-    for (const [, p] of this.pending) p.reject(err);
+    for (const [id, p] of this.pending) {
+      const t = this.pendingTimeouts.get(id);
+      if (t) clearTimeout(t);
+      p.reject(err);
+    }
     this.pending.clear();
+    this.pendingTimeouts.clear();
   }
 
   private queueConnect(): void {
@@ -178,6 +208,11 @@ class GatewayClient {
       const p = this.pending.get(msg.id);
       if (!p) return;
       this.pending.delete(msg.id);
+      const t = this.pendingTimeouts.get(msg.id);
+      if (t) {
+        clearTimeout(t);
+        this.pendingTimeouts.delete(msg.id);
+      }
       if (msg.ok) {
         p.resolve(msg.payload);
       } else {
@@ -193,6 +228,216 @@ interface ChatMessage {
   role: "user" | "assistant";
   text: string;
   timestamp: number;
+}
+
+// ─── Onboarding Modal ────────────────────────────────────────────────
+
+class OnboardingModal extends Modal {
+  plugin: OpenClawPlugin;
+  private step = 0;
+  private urlInput: HTMLInputElement | null = null;
+  private tokenInput: HTMLInputElement | null = null;
+  private statusEl: HTMLElement | null = null;
+
+  constructor(app: App, plugin: OpenClawPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen(): void {
+    this.modalEl.addClass("openclaw-onboarding");
+    this.renderStep();
+  }
+
+  onClose(): void {
+    // If they close without finishing, that's ok — they can reopen from settings
+  }
+
+  private renderStep(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    if (this.step === 0) this.renderWelcome(contentEl);
+    else if (this.step === 1) this.renderConnect(contentEl);
+    else if (this.step === 2) this.renderDone(contentEl);
+  }
+
+  private renderWelcome(el: HTMLElement): void {
+    el.createEl("h2", { text: "Welcome to OpenClaw" });
+    el.createEl("p", {
+      text: "This plugin connects Obsidian to your OpenClaw AI agent. Your vault becomes the agent's workspace — it can read your notes, create new ones, and search across everything.",
+      cls: "openclaw-onboard-desc",
+    });
+
+    el.createEl("h3", { text: "Before you start" });
+    const list = el.createEl("ul", { cls: "openclaw-onboard-list" });
+    list.createEl("li", {
+      text: "OpenClaw must be running on your machine (or reachable via Tailscale)",
+    });
+    list.createEl("li", {
+      text: "Your Obsidian vault should be the OpenClaw workspace (~/.openclaw/workspace)",
+    });
+    list.createEl("li", {
+      text: "If your gateway requires auth, have your token ready",
+    });
+
+    const info = el.createDiv("openclaw-onboard-info");
+    info.createEl("strong", { text: "Don't have OpenClaw yet? " });
+    info.createEl("span", {
+      text: "Visit botsetupguide.com for the full setup guide.",
+    });
+
+    const btnRow = el.createDiv("openclaw-onboard-buttons");
+    const nextBtn = btnRow.createEl("button", { text: "Connect to gateway →", cls: "mod-cta" });
+    nextBtn.addEventListener("click", () => {
+      this.step = 1;
+      this.renderStep();
+    });
+  }
+
+  private renderConnect(el: HTMLElement): void {
+    el.createEl("h2", { text: "Connect to your gateway" });
+    el.createEl("p", {
+      text: "Enter your OpenClaw gateway address. If it's running on this machine, the default should work.",
+      cls: "openclaw-onboard-desc",
+    });
+
+    // URL input
+    const urlGroup = el.createDiv("openclaw-onboard-field");
+    urlGroup.createEl("label", { text: "Gateway URL" });
+    this.urlInput = urlGroup.createEl("input", {
+      type: "text",
+      value: this.plugin.settings.gatewayUrl,
+      placeholder: "ws://127.0.0.1:18789",
+      cls: "openclaw-onboard-input",
+    });
+
+    const urlHint = urlGroup.createDiv("openclaw-onboard-hint");
+    urlHint.innerHTML = "<strong>Local:</strong> ws://127.0.0.1:18789 &nbsp;|&nbsp; <strong>Tailscale:</strong> ws://100.x.x.x:18789";
+
+    // Token input
+    const tokenGroup = el.createDiv("openclaw-onboard-field");
+    tokenGroup.createEl("label", { text: "Auth Token (optional)" });
+    this.tokenInput = tokenGroup.createEl("input", {
+      type: "password",
+      value: this.plugin.settings.token,
+      placeholder: "Leave empty if no auth configured",
+      cls: "openclaw-onboard-input",
+    });
+
+    // Security note
+    const secNote = el.createDiv("openclaw-onboard-security");
+    secNote.createEl("strong", { text: "🔒 Security" });
+    secNote.createEl("p", {
+      text: "Your token is stored locally in this vault's plugin data and never sent anywhere except your own gateway. All communication stays between Obsidian and your OpenClaw instance.",
+    });
+
+    // Status
+    this.statusEl = el.createDiv("openclaw-onboard-status");
+
+    // Buttons
+    const btnRow = el.createDiv("openclaw-onboard-buttons");
+    const backBtn = btnRow.createEl("button", { text: "← Back" });
+    backBtn.addEventListener("click", () => {
+      this.step = 0;
+      this.renderStep();
+    });
+    const testBtn = btnRow.createEl("button", { text: "Test connection", cls: "mod-cta" });
+    testBtn.addEventListener("click", () => this.testConnection(testBtn));
+  }
+
+  private async testConnection(btn: HTMLButtonElement): Promise<void> {
+    if (!this.urlInput || !this.statusEl) return;
+
+    const url = this.urlInput.value.trim();
+    if (!url) {
+      this.showStatus("Enter a gateway URL", "error");
+      return;
+    }
+    if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+      this.showStatus("URL must start with ws:// or wss://", "error");
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = "Connecting...";
+    this.showStatus("Connecting to gateway...", "info");
+
+    const token = this.tokenInput?.value.trim() || "";
+
+    // Save settings
+    this.plugin.settings.gatewayUrl = url;
+    this.plugin.settings.token = token;
+    await this.plugin.saveSettings();
+
+    // Try to connect with a timeout
+    const testResult = await new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => {
+        testClient.stop();
+        resolve(false);
+      }, 8000);
+
+      const testClient = new GatewayClient({
+        url,
+        token: token || undefined,
+        onHello: () => {
+          clearTimeout(timeout);
+          testClient.stop();
+          resolve(true);
+        },
+        onClose: () => {
+          // Don't resolve here — let timeout handle failure
+        },
+      });
+      testClient.start();
+    });
+
+    btn.disabled = false;
+    btn.textContent = "Test connection";
+
+    if (testResult) {
+      this.showStatus("✓ Connected successfully!", "success");
+      // Auto-advance after a moment
+      setTimeout(() => {
+        this.step = 2;
+        this.renderStep();
+      }, 1000);
+    } else {
+      this.showStatus("Could not connect. Check that OpenClaw is running and the URL is correct.", "error");
+    }
+  }
+
+  private renderDone(el: HTMLElement): void {
+    el.createEl("h2", { text: "You're all set!" });
+    el.createEl("p", {
+      text: "OpenClaw is connected. Click the chat icon (💬) in the left ribbon to open the sidebar and start chatting with your AI.",
+      cls: "openclaw-onboard-desc",
+    });
+
+    const tips = el.createDiv("openclaw-onboard-tips");
+    tips.createEl("h3", { text: "Quick tips" });
+    const list = tips.createEl("ul", { cls: "openclaw-onboard-list" });
+    list.createEl("li", { text: "Use Cmd/Ctrl+P → \"Ask about current note\" to send any note as context" });
+    list.createEl("li", { text: "The agent can read and edit files in your vault directly" });
+    list.createEl("li", { text: "Change settings anytime in Settings → OpenClaw" });
+
+    const btnRow = el.createDiv("openclaw-onboard-buttons");
+    const doneBtn = btnRow.createEl("button", { text: "Start chatting", cls: "mod-cta" });
+    doneBtn.addEventListener("click", async () => {
+      this.plugin.settings.onboardingComplete = true;
+      await this.plugin.saveSettings();
+      this.close();
+      this.plugin.connectGateway();
+      this.plugin.activateView();
+    });
+  }
+
+  private showStatus(text: string, type: "info" | "success" | "error"): void {
+    if (!this.statusEl) return;
+    this.statusEl.empty();
+    this.statusEl.className = `openclaw-onboard-status openclaw-onboard-status-${type}`;
+    this.statusEl.textContent = text;
+  }
 }
 
 // ─── Chat View ───────────────────────────────────────────────────────
@@ -330,11 +575,10 @@ class OpenClawChatView extends ItemView {
     this.inputEl.value = "";
     this.autoResize();
 
-    // Add user message
     this.messages.push({ role: "user", text, timestamp: Date.now() });
     await this.renderMessages();
 
-    const runId = uuid();
+    const runId = generateId();
     this.streamRunId = runId;
     this.streamText = "";
     this.abortBtn.style.display = "";
@@ -381,7 +625,6 @@ class OpenClawChatView extends ItemView {
       }
     } else if (payload.state === "final") {
       this.finishStream();
-      // Reload history to get the final formatted message
       this.loadHistory();
     } else if (payload.state === "aborted") {
       if (this.streamText) {
@@ -466,31 +709,40 @@ export default class OpenClawPlugin extends Plugin {
       this.activateView();
     });
 
-    // Command: toggle chat
+    // Commands
     this.addCommand({
       id: "toggle-chat",
       name: "Toggle chat sidebar",
       callback: () => this.activateView(),
     });
 
-    // Command: ask about current note
     this.addCommand({
       id: "ask-about-note",
       name: "Ask about current note",
       callback: () => this.askAboutNote(),
     });
 
-    // Command: reconnect
     this.addCommand({
       id: "reconnect",
       name: "Reconnect to gateway",
       callback: () => this.connectGateway(),
     });
 
+    this.addCommand({
+      id: "setup",
+      name: "Run setup wizard",
+      callback: () => new OnboardingModal(this.app, this).open(),
+    });
+
     this.addSettingTab(new OpenClawSettingTab(this.app, this));
 
-    // Auto-connect
-    this.connectGateway();
+    // Show onboarding on first run, otherwise auto-connect
+    if (!this.settings.onboardingComplete) {
+      // Small delay so Obsidian finishes loading
+      setTimeout(() => new OnboardingModal(this.app, this).open(), 500);
+    } else {
+      this.connectGateway();
+    }
   }
 
   onunload(): void {
@@ -515,6 +767,12 @@ export default class OpenClawPlugin extends Plugin {
     const url = this.settings.gatewayUrl.trim();
     if (!url) return;
 
+    // Security: validate URL scheme
+    if (!url.startsWith("ws://") && !url.startsWith("wss://")) {
+      new Notice("OpenClaw: Invalid gateway URL (must be ws:// or wss://)");
+      return;
+    }
+
     this.gateway = new GatewayClient({
       url,
       token: this.settings.token.trim() || undefined,
@@ -522,7 +780,6 @@ export default class OpenClawPlugin extends Plugin {
         this.gatewayConnected = true;
         this.chatView?.updateStatus();
         this.chatView?.loadHistory();
-        new Notice("OpenClaw connected");
       },
       onClose: () => {
         this.gatewayConnected = false;
@@ -572,14 +829,10 @@ export default class OpenClawPlugin extends Plugin {
     }
 
     const message = `Here is my current note "${file.basename}":\n\n${content}\n\nWhat can you tell me about this?`;
-
-    // Add to input so user can modify before sending
-    if (this.chatView) {
-      const inputEl = this.chatView.containerEl.querySelector(".openclaw-input") as HTMLTextAreaElement;
-      if (inputEl) {
-        inputEl.value = message;
-        inputEl.focus();
-      }
+    const inputEl = this.chatView.containerEl.querySelector(".openclaw-input") as HTMLTextAreaElement;
+    if (inputEl) {
+      inputEl.value = message;
+      inputEl.focus();
     }
   }
 }
@@ -598,11 +851,11 @@ class OpenClawSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
-    containerEl.createEl("h2", { text: "OpenClaw Settings" });
+    containerEl.createEl("h2", { text: "OpenClaw" });
 
     new Setting(containerEl)
       .setName("Gateway URL")
-      .setDesc("WebSocket URL of your OpenClaw gateway (e.g., ws://127.0.0.1:18789 or ws://100.x.x.x:18789 via Tailscale)")
+      .setDesc("WebSocket URL (e.g., ws://127.0.0.1:18789 or ws://100.x.x.x:18789 via Tailscale)")
       .addText((text) =>
         text
           .setPlaceholder("ws://127.0.0.1:18789")
@@ -615,20 +868,21 @@ class OpenClawSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Auth Token")
-      .setDesc("Gateway authentication token (leave empty if no auth is configured)")
-      .addText((text) =>
-        text
+      .setDesc("Gateway auth token (leave empty if no auth)")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        return text
           .setPlaceholder("Token")
           .setValue(this.plugin.settings.token)
           .onChange(async (value) => {
             this.plugin.settings.token = value;
             await this.plugin.saveSettings();
-          })
-      );
+          });
+      });
 
     new Setting(containerEl)
       .setName("Session Key")
-      .setDesc("Which session to chat in (default: main)")
+      .setDesc("Which session to chat in")
       .addText((text) =>
         text
           .setPlaceholder("main")
@@ -641,10 +895,20 @@ class OpenClawSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Reconnect")
-      .setDesc("Reconnect to the gateway with current settings")
+      .setDesc("Re-establish the gateway connection")
       .addButton((btn) =>
         btn.setButtonText("Reconnect").onClick(() => {
           this.plugin.connectGateway();
+          new Notice("OpenClaw: Reconnecting...");
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Run setup wizard")
+      .setDesc("Re-run the onboarding flow")
+      .addButton((btn) =>
+        btn.setButtonText("Setup").onClick(() => {
+          new OnboardingModal(this.app, this.plugin).open();
         })
       );
   }

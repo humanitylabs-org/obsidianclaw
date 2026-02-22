@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ObsidianClaw — AI Agent Inside Your Vault</title>
+  <meta name="description" content="Chat with your OpenClaw AI agent from inside Obsidian. Your vault is the workspace.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%237c3aed'/><text y='68' font-size='50' font-family='system-ui' fill='%23fff' x='50' text-anchor='middle' font-weight='700'>⚡</text></svg>">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --obsidian:#1e1e2e;--obsidian-light:#2e2e3e;--obsidian-border:#3e3e50;
+      --purple:#7c3aed;--purple-light:#a78bfa;--purple-glow:rgba(124,58,237,.15);
+      --text:#e2e8f0;--text-dim:#94a3b8;--text-bright:#f8fafc;
+      --bg:#0f0f17;--bg-card:#1a1a28;
+    }
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.7;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+    a{color:var(--purple-light);text-decoration:none}a:hover{text-decoration:underline}
+
+    .hero{
+      min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      text-align:center;padding:60px 24px;
+      background:radial-gradient(ellipse at 50% 30%,var(--purple-glow) 0%,transparent 60%);
+    }
+
+    .badge{
+      display:inline-flex;align-items:center;gap:6px;
+      background:var(--bg-card);border:1px solid var(--obsidian-border);
+      padding:6px 14px;border-radius:20px;font-size:12px;
+      color:var(--text-dim);font-weight:500;margin-bottom:24px;
+    }
+    .badge-dot{width:6px;height:6px;border-radius:50%;background:var(--purple)}
+
+    h1{
+      font-size:clamp(2.5rem,6vw,4rem);font-weight:800;
+      color:var(--text-bright);letter-spacing:-.03em;
+      line-height:1.1;margin-bottom:16px;max-width:700px;
+    }
+    h1 span{
+      background:linear-gradient(135deg,var(--purple),var(--purple-light));
+      -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+      background-clip:text;
+    }
+
+    .subtitle{
+      font-size:clamp(1rem,2vw,1.25rem);color:var(--text-dim);
+      max-width:520px;margin-bottom:40px;line-height:1.6;
+    }
+
+    .cta-btn{
+      display:inline-flex;align-items:center;gap:8px;
+      background:var(--purple);color:#fff;
+      padding:14px 32px;border-radius:12px;
+      font-size:16px;font-weight:600;
+      border:none;cursor:pointer;
+      transition:all .15s;text-decoration:none;
+      box-shadow:0 4px 24px rgba(124,58,237,.3);
+    }
+    .cta-btn:hover{background:#6d28d9;transform:translateY(-1px);box-shadow:0 6px 32px rgba(124,58,237,.4);text-decoration:none}
+    .cta-btn svg{width:20px;height:20px}
+
+    .cta-sub{font-size:13px;color:var(--text-dim);margin-top:12px}
+
+    /* Features */
+    .features{
+      padding:80px 24px;max-width:900px;margin:0 auto;
+      display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:20px;
+    }
+    .feature{
+      background:var(--bg-card);border:1px solid var(--obsidian-border);
+      border-radius:16px;padding:28px 24px;
+      transition:border-color .2s;
+    }
+    .feature:hover{border-color:var(--purple)}
+    .feature-icon{font-size:24px;margin-bottom:12px}
+    .feature h3{font-size:15px;font-weight:700;color:var(--text-bright);margin-bottom:6px}
+    .feature p{font-size:13px;color:var(--text-dim);line-height:1.6}
+
+    /* How it works */
+    .how{
+      padding:60px 24px 80px;max-width:600px;margin:0 auto;text-align:center;
+    }
+    .how h2{font-size:24px;font-weight:700;color:var(--text-bright);margin-bottom:24px}
+    .how-steps{text-align:left;display:flex;flex-direction:column;gap:16px}
+    .how-step{
+      display:flex;gap:14px;align-items:flex-start;
+      background:var(--bg-card);border:1px solid var(--obsidian-border);
+      border-radius:12px;padding:16px 20px;
+    }
+    .how-num{
+      width:28px;height:28px;border-radius:8px;
+      background:var(--purple-glow);border:1px solid var(--purple);
+      color:var(--purple-light);font-size:13px;font-weight:700;
+      display:flex;align-items:center;justify-content:center;flex-shrink:0;
+    }
+    .how-step-text h4{font-size:14px;font-weight:600;color:var(--text-bright);margin-bottom:2px}
+    .how-step-text p{font-size:13px;color:var(--text-dim);line-height:1.5}
+
+    /* Security */
+    .security{
+      max-width:600px;margin:0 auto;padding:0 24px 80px;
+    }
+    .security-card{
+      background:var(--bg-card);border:1px solid var(--obsidian-border);
+      border-radius:16px;padding:28px 28px;text-align:center;
+    }
+    .security-card h3{font-size:16px;font-weight:700;color:var(--text-bright);margin-bottom:8px}
+    .security-card p{font-size:13px;color:var(--text-dim);line-height:1.7;max-width:440px;margin:0 auto}
+
+    /* Footer */
+    footer{
+      text-align:center;padding:40px 24px;
+      border-top:1px solid var(--obsidian-border);
+      font-size:12px;color:var(--text-dim);
+    }
+    footer a{color:var(--text-dim)}footer a:hover{color:var(--purple-light)}
+    .footer-sep{margin:0 8px}
+  </style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="badge"><span class="badge-dot"></span> Open Source · Free Forever</div>
+  <h1>Your AI agent,<br><span>inside Obsidian</span></h1>
+  <p class="subtitle">Chat with your OpenClaw agent from a sidebar in Obsidian. It reads your notes, creates new ones, and searches across your entire vault.</p>
+  <a href="https://github.com/humanitylabs-org/obsidianclaw" class="cta-btn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+    Get the plugin
+  </a>
+  <p class="cta-sub">Requires <a href="https://openclaw.ai">OpenClaw</a> + <a href="https://obsidian.md">Obsidian</a></p>
+</section>
+
+<section class="features">
+  <div class="feature">
+    <div class="feature-icon">💬</div>
+    <h3>Chat sidebar</h3>
+    <p>Send messages and get streaming responses in a native Obsidian sidebar panel. Markdown renders beautifully.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">📄</div>
+    <h3>Ask about any note</h3>
+    <p>One command sends the current note as context. The agent reads it and responds with full understanding.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">🔄</div>
+    <h3>Live file sync</h3>
+    <p>Your vault is the agent's workspace. When it creates or edits a file, you see it instantly. When you edit, it can see your changes.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">🎨</div>
+    <h3>Native theming</h3>
+    <p>Automatically matches your Obsidian theme — light, dark, or custom. Feels like it was always part of the app.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">⚡</div>
+    <h3>Streaming responses</h3>
+    <p>See tokens appear in real-time as the AI thinks. Stop generation at any point with one click.</p>
+  </div>
+  <div class="feature">
+    <div class="feature-icon">🔌</div>
+    <h3>Auto-reconnect</h3>
+    <p>Connection drops? It reconnects automatically with exponential backoff. Green dot = connected.</p>
+  </div>
+</section>
+
+<section class="how">
+  <h2>Setup in 2 minutes</h2>
+  <div class="how-steps">
+    <div class="how-step">
+      <div class="how-num">1</div>
+      <div class="how-step-text">
+        <h4>Install the plugin</h4>
+        <p>Download from GitHub and drop into your vault's plugin folder. Or install from Community Plugins (coming soon).</p>
+      </div>
+    </div>
+    <div class="how-step">
+      <div class="how-num">2</div>
+      <div class="how-step-text">
+        <h4>Connect to your gateway</h4>
+        <p>The setup wizard walks you through entering your OpenClaw gateway address and testing the connection.</p>
+      </div>
+    </div>
+    <div class="how-step">
+      <div class="how-num">3</div>
+      <div class="how-step-text">
+        <h4>Start chatting</h4>
+        <p>Click the chat icon in the sidebar. Your AI agent is right there, inside your vault, ready to help.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="security">
+  <div class="security-card">
+    <h3>🔒 Private by design</h3>
+    <p>All communication stays between Obsidian and your own OpenClaw instance. No data is sent to Humanity Labs or any third party. Your token is stored locally and never leaves your device.</p>
+  </div>
+</section>
+
+<footer>
+  <a href="https://humanitylabs.org">Humanity Labs</a>
+  <span class="footer-sep">·</span>
+  <a href="https://github.com/humanitylabs-org/obsidianclaw">GitHub</a>
+  <span class="footer-sep">·</span>
+  <a href="https://botsetupguide.com">Setup Guide</a>
+  <span class="footer-sep">·</span>
+  <a href="https://vajra.to">Vajra</a>
+</footer>
+
+</body>
+</html>

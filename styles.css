@@ -1,4 +1,144 @@
-/* ObsidianClaw — Chat Sidebar Styles */
+/* ObsidianClaw — Chat Sidebar + Onboarding Styles */
+
+/* ─── Onboarding Modal ─── */
+
+.openclaw-onboarding .modal-content {
+  max-width: 520px;
+  padding: 8px;
+}
+
+.openclaw-onboarding h2 {
+  margin: 0 0 8px;
+  font-size: 20px;
+}
+
+.openclaw-onboarding h3 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+}
+
+.openclaw-onboard-desc {
+  color: var(--text-muted);
+  font-size: 14px;
+  line-height: 1.6;
+  margin-bottom: 16px;
+}
+
+.openclaw-onboard-list {
+  padding-left: 20px;
+  margin: 8px 0 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.7;
+}
+
+.openclaw-onboard-list li {
+  margin-bottom: 4px;
+}
+
+.openclaw-onboard-info {
+  background: var(--background-secondary);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 20px;
+}
+
+.openclaw-onboard-field {
+  margin-bottom: 16px;
+}
+
+.openclaw-onboard-field label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 4px;
+  color: var(--text-normal);
+}
+
+.openclaw-onboard-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  font-size: 13px;
+  font-family: var(--font-monospace);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+
+.openclaw-onboard-input:focus {
+  outline: none;
+  border-color: var(--interactive-accent);
+}
+
+.openclaw-onboard-hint {
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+
+.openclaw-onboard-security {
+  background: var(--background-secondary);
+  padding: 12px 16px;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 16px 0;
+  line-height: 1.6;
+}
+
+.openclaw-onboard-security p {
+  margin: 4px 0 0;
+}
+
+.openclaw-onboard-status {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin: 12px 0;
+  min-height: 20px;
+}
+
+.openclaw-onboard-status:empty {
+  display: none;
+}
+
+.openclaw-onboard-status-info {
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.openclaw-onboard-status-success {
+  background: rgba(16, 185, 129, 0.1);
+  color: var(--color-green);
+}
+
+.openclaw-onboard-status-error {
+  background: rgba(239, 68, 68, 0.1);
+  color: var(--color-red);
+}
+
+.openclaw-onboard-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.openclaw-onboard-tips {
+  background: var(--background-secondary);
+  padding: 16px;
+  border-radius: 8px;
+  margin: 16px 0;
+}
+
+.openclaw-onboard-tips h3 {
+  margin: 0 0 8px;
+}
+
+/* ─── Chat Sidebar ─── */
 
 .openclaw-chat-container {
   display: flex;
