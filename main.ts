@@ -376,6 +376,7 @@ class GatewayClient {
 interface ChatMessage {
   role: "user" | "assistant";
   text: string;
+  images: string[]; // data URIs or URLs
   timestamp: number;
 }
 
@@ -607,7 +608,7 @@ class OpenClawChatView extends ItemView {
   private typingEl!: HTMLElement;
   private attachPreviewEl!: HTMLElement;
   private fileInputEl!: HTMLInputElement;
-  private pendingAttachment: { name: string; content: string } | null = null;
+  private pendingAttachment: { name: string; content: string; vaultPath?: string } | null = null;
   private sending = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: OpenClawPlugin) {
@@ -729,12 +730,16 @@ class OpenClawChatView extends ItemView {
       if (result?.messages && Array.isArray(result.messages)) {
         this.messages = result.messages
           .filter((m: any) => m.role === "user" || m.role === "assistant")
-          .map((m: any) => ({
-            role: m.role as "user" | "assistant",
-            text: this.extractText(m.content),
-            timestamp: m.timestamp ?? Date.now(),
-          }))
-          .filter((m: ChatMessage) => m.text.trim() && !m.text.startsWith("HEARTBEAT"));
+          .map((m: any) => {
+            const { text, images } = this.extractContent(m.content);
+            return {
+              role: m.role as "user" | "assistant",
+              text,
+              images,
+              timestamp: m.timestamp ?? Date.now(),
+            };
+          })
+          .filter((m: ChatMessage) => (m.text.trim() || m.images.length > 0) && !m.text.startsWith("HEARTBEAT"));
         await this.renderMessages();
       }
     } catch (e) {
@@ -742,16 +747,50 @@ class OpenClawChatView extends ItemView {
     }
   }
 
-  private extractText(content: any): string {
+  private extractContent(content: any): { text: string; images: string[] } {
     let text = "";
+    const images: string[] = [];
+
     if (typeof content === "string") {
       text = content;
     } else if (Array.isArray(content)) {
-      text = content
-        .filter((c: any) => c.type === "text")
-        .map((c: any) => c.text)
-        .join("\n");
+      for (const c of content) {
+        if (c.type === "text") {
+          text += (text ? "\n" : "") + c.text;
+        } else if (c.type === "image_url" && c.image_url?.url) {
+          images.push(c.image_url.url);
+        }
+      }
     }
+
+    // Extract vault image paths from "File saved at:" lines
+    const savedAtRegex = /File saved at:\s*(.+?openclaw-attachments\/[^\s\n]+)/g;
+    let match;
+    while ((match = savedAtRegex.exec(text)) !== null) {
+      // Try to resolve as vault-relative path
+      const fullPath = match[1].trim();
+      const vaultRelative = fullPath.includes("openclaw-attachments/")
+        ? "openclaw-attachments/" + fullPath.split("openclaw-attachments/")[1]
+        : null;
+      if (vaultRelative) {
+        try {
+          const resourcePath = this.app.vault.adapter.getResourcePath(vaultRelative);
+          if (resourcePath) images.push(resourcePath);
+        } catch { /* ignore */ }
+      }
+    }
+
+    // Extract inline data URIs from text (legacy)
+    const dataUriRegex = /(?:^|\n)data:(image\/[^;]+);base64,[A-Za-z0-9+/=\n]+/g;
+    while ((match = dataUriRegex.exec(text)) !== null) {
+      images.push(match[0].replace(/^\n/, "").trim());
+    }
+    // Remove data URIs from text display
+    text = text.replace(/\n?data:image\/[^;]+;base64,[A-Za-z0-9+/=\n]+/g, "").trim();
+    // Strip [Attached image: ...] and "File saved at:" lines
+    text = text.replace(/^\[Attached image:.*?\]\s*/gm, "").trim();
+    text = text.replace(/^File saved at:.*$/gm, "").trim();
+
     // Strip gateway metadata blocks (Conversation info + JSON code block)
     text = text.replace(/Conversation info \(untrusted metadata\):\s*```json[\s\S]*?```\s*/g, "").trim();
     // Strip any remaining standalone metadata JSON blocks
@@ -763,8 +802,8 @@ class OpenClawChatView extends ItemView {
     // Strip "To send an image back..." instruction lines
     text = text.replace(/^To send an image back.*$/gm, "").trim();
     // Strip "NO_REPLY" responses
-    if (text === "NO_REPLY" || text === "HEARTBEAT_OK") return "";
-    return text;
+    if (text === "NO_REPLY" || text === "HEARTBEAT_OK") text = "";
+    return { text, images };
   }
 
   async sendMessage(): Promise<void> {
@@ -784,14 +823,20 @@ class OpenClawChatView extends ItemView {
     // Append attachment content to message
     let fullMessage = text;
     const displayText = text;
+    const userImages: string[] = [];
     if (this.pendingAttachment) {
       fullMessage = (text ? text + "\n\n" : "") + this.pendingAttachment.content;
       if (!text) text = `📎 ${this.pendingAttachment.name}`;
+      // Get a displayable resource URL for the image preview
+      if (this.pendingAttachment.vaultPath) {
+        const resourcePath = this.app.vault.adapter.getResourcePath(this.pendingAttachment.vaultPath);
+        if (resourcePath) userImages.push(resourcePath);
+      }
       this.pendingAttachment = null;
       this.attachPreviewEl.style.display = "none";
     }
 
-    this.messages.push({ role: "user", text: displayText || text, timestamp: Date.now() });
+    this.messages.push({ role: "user", text: displayText || text, images: userImages, timestamp: Date.now() });
     await this.renderMessages();
 
     const runId = generateId();
@@ -809,7 +854,7 @@ class OpenClawChatView extends ItemView {
         idempotencyKey: runId,
       });
     } catch (e) {
-      this.messages.push({ role: "assistant", text: `Error: ${e}`, timestamp: Date.now() });
+      this.messages.push({ role: "assistant", text: `Error: ${e}`, images: [], timestamp: Date.now() });
       this.streamRunId = null;
       this.streamText = null;
       this.abortBtn.style.display = "none";
@@ -843,15 +888,23 @@ class OpenClawChatView extends ItemView {
         /\.(md|txt|json|csv|yaml|yml|js|ts|py|html|css|xml|toml|ini|sh|log)$/i.test(file.name);
 
       if (isImage) {
-        // Read as base64, send inline (don't save to vault)
+        // Save image to vault and reference by path (never send base64 inline — it fills the context window)
         const arrayBuf = await file.arrayBuffer();
-        const bytes = new Uint8Array(arrayBuf);
-        let binary = "";
-        for (const b of bytes) binary += String.fromCharCode(b);
-        const b64 = btoa(binary);
+        const attachDir = "openclaw-attachments";
+        if (!this.app.vault.getAbstractFileByPath(attachDir)) {
+          await this.app.vault.createFolder(attachDir);
+        }
+        const timestamp = Date.now();
+        const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+        const attachPath = `${attachDir}/${timestamp}-${safeName}`;
+        await this.app.vault.createBinary(attachPath, arrayBuf);
+        // Get the absolute vault path for the agent
+        const vaultPath = (this.app.vault.adapter as any).basePath || "";
+        const absPath = vaultPath ? `${vaultPath}/${attachPath}` : attachPath;
         this.pendingAttachment = {
           name: file.name,
-          content: `[Attached image: ${file.name} (${file.type}, ${Math.round(file.size/1024)}KB)]\ndata:${file.type};base64,${b64}`,
+          content: `[Attached image: ${file.name} (${file.type}, ${Math.round(file.size/1024)}KB)]\nFile saved at: ${absPath}`,
+          vaultPath: attachPath,
         };
       } else if (isText) {
         const content = await file.text();
@@ -905,7 +958,7 @@ class OpenClawChatView extends ItemView {
       this.loadHistory();
     } else if (payload.state === "aborted") {
       if (this.streamText) {
-        this.messages.push({ role: "assistant", text: this.streamText, timestamp: Date.now() });
+        this.messages.push({ role: "assistant", text: this.streamText, images: [], timestamp: Date.now() });
       }
       this.finishStream();
       this.renderMessages();
@@ -913,6 +966,7 @@ class OpenClawChatView extends ItemView {
       this.messages.push({
         role: "assistant",
         text: `Error: ${payload.errorMessage ?? "unknown error"}`,
+        images: [],
         timestamp: Date.now(),
       });
       this.finishStream();
@@ -947,14 +1001,33 @@ class OpenClawChatView extends ItemView {
     for (const msg of this.messages) {
       const cls = msg.role === "user" ? "openclaw-msg-user" : "openclaw-msg-assistant";
       const bubble = this.messagesEl.createDiv(`openclaw-msg ${cls}`);
-      if (msg.role === "assistant") {
-        try {
-          await MarkdownRenderer.render(this.app, msg.text, bubble, "", this.plugin);
-        } catch {
+      // Render images
+      if (msg.images && msg.images.length > 0) {
+        const imgContainer = bubble.createDiv("openclaw-msg-images");
+        for (const src of msg.images) {
+          const img = imgContainer.createEl("img", {
+            cls: "openclaw-msg-img",
+            attr: { src, loading: "lazy" },
+          });
+          img.addEventListener("click", () => {
+            // Open full-size in a modal-like overlay
+            const overlay = document.body.createDiv("openclaw-img-overlay");
+            const fullImg = overlay.createEl("img", { attr: { src } });
+            overlay.addEventListener("click", () => overlay.remove());
+          });
+        }
+      }
+      // Render text
+      if (msg.text) {
+        if (msg.role === "assistant") {
+          try {
+            await MarkdownRenderer.render(this.app, msg.text, bubble, "", this.plugin);
+          } catch {
+            bubble.createDiv({ text: msg.text, cls: "openclaw-msg-text" });
+          }
+        } else {
           bubble.createDiv({ text: msg.text, cls: "openclaw-msg-text" });
         }
-      } else {
-        bubble.createDiv({ text: msg.text, cls: "openclaw-msg-text" });
       }
     }
     this.scrollToBottom();
@@ -962,7 +1035,10 @@ class OpenClawChatView extends ItemView {
 
   private scrollToBottom(): void {
     if (this.messagesEl) {
-      this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      // Use requestAnimationFrame to ensure DOM has updated
+      requestAnimationFrame(() => {
+        this.messagesEl.scrollTop = this.messagesEl.scrollHeight;
+      });
     }
   }
 
@@ -1017,12 +1093,16 @@ export default class OpenClawPlugin extends Plugin {
 
     this.addSettingTab(new OpenClawSettingTab(this.app, this));
 
-    // Show onboarding on first run, otherwise auto-connect
+    // Show onboarding on first run, otherwise auto-connect and open chat
     if (!this.settings.onboardingComplete) {
       // Small delay so Obsidian finishes loading
       setTimeout(() => new OnboardingModal(this.app, this).open(), 500);
     } else {
       this.connectGateway();
+      // Auto-open chat sidebar after workspace is ready
+      this.app.workspace.onLayoutReady(() => {
+        this.activateView();
+      });
     }
   }
 

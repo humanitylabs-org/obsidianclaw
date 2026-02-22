@@ -30,4 +30,14 @@ esbuild.build({
   treeShaking: true,
   outfile: "main.js",
   minify: prod,
+}).then(async () => {
+  // Copy built files to Obsidian plugin folder
+  const fs = await import("fs");
+  const path = await import("path");
+  const pluginDir = path.join(path.dirname(new URL(import.meta.url).pathname), "../../.obsidian/plugins/obsidianclaw");
+  if (fs.existsSync(pluginDir)) {
+    fs.copyFileSync("main.js", path.join(pluginDir, "main.js"));
+    fs.copyFileSync("styles.css", path.join(pluginDir, "styles.css"));
+    console.log("Copied to .obsidian/plugins/obsidianclaw/");
+  }
 }).catch(() => process.exit(1));
